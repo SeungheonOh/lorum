@@ -1,0 +1,15 @@
+[package]
+name = "lorum-agent-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+lorum-domain = { path = "../lorum-domain" }
+lorum-ai-contract = { path = "../lorum-ai-contract" }
+
+[dev-dependencies]
+futures.workspace = true

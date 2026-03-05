@@ -1,0 +1,20 @@
+[package]
+name = "lorum-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+lorum-domain = { path = "../lorum-domain" }
+lorum-ai-contract = { path = "../lorum-ai-contract" }
+lorum-agent-core = { path = "../lorum-agent-core" }
+lorum-session = { path = "../lorum-session" }
+
+[dev-dependencies]
+futures.workspace = true
+lorum-ai-connectors = { path = "../lorum-ai-connectors" }
+serde_json.workspace = true

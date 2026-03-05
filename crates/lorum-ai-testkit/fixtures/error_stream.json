@@ -1,0 +1,23 @@
+{
+  "name": "error_stream",
+  "expected_stop_reason": "error",
+  "events": [
+    {
+      "type": "start",
+      "sequence_no": 1,
+      "message_id": "m-error",
+      "model": {
+        "provider": "openai",
+        "api": "openai-codex-responses",
+        "model": "gpt-codex"
+      }
+    },
+    {
+      "type": "error",
+      "sequence_no": 2,
+      "code": "rate_limited",
+      "message": "retry later",
+      "retryable": true
+    }
+  ]
+}

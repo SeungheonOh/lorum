@@ -1,0 +1,23 @@
+[package]
+name = "lorum-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+lorum-ai-auth = { path = "../lorum-ai-auth" }
+lorum-ai-connectors = { path = "../lorum-ai-connectors" }
+lorum-ai-contract = { path = "../lorum-ai-contract" }
+lorum-domain = { path = "../lorum-domain" }
+lorum-runtime = { path = "../lorum-runtime" }
+lorum-session = { path = "../lorum-session" }
+lorum-ui-core = { path = "../lorum-ui-core" }
+lorum-ui-print = { path = "../lorum-ui-print" }
+lorum-tools = { path = "../lorum-tools" }
+reedline.workspace = true
+crossterm.workspace = true
+termimad.workspace = true
