@@ -1,4 +1,6 @@
-use lorum_ai_contract::{AssistantEventSink, AssistantMessageEvent, ProviderError};
+use lorum_ai_contract::{
+    AssistantEventSink, AssistantMessageEvent, ProviderError, ProviderInputMessage,
+};
 use serde_json::Value;
 
 #[derive(Default, Debug, Clone)]
@@ -59,6 +61,10 @@ pub fn coalesce_delta_events(events: Vec<AssistantMessageEvent>) -> Vec<Assistan
     }
 
     output
+}
+
+pub(crate) fn sanitize_tool_call_pairing(messages: &mut Vec<ProviderInputMessage>) {
+    lorum_ai_contract::patch_orphaned_tool_calls(messages, "Tool call result unavailable");
 }
 
 pub(crate) fn normalize_provider_error(

@@ -7,8 +7,19 @@ use lorum_ai_contract::{ToolCall, ToolDefinition};
 use lorum_runtime::{ToolCallDisplay, ToolCallSummary, ToolExecutionResult, ToolExecutor, ToolResultSummary};
 use serde_json::Value;
 
-pub(crate) mod cid;
+pub mod cid;
 mod tools;
+
+/// Internal helpers re-exported for integration tests.
+#[doc(hidden)]
+pub mod internals {
+    pub mod hashline {
+        pub use crate::tools::hashline::apply_edits;
+    }
+    pub mod patch {
+        pub use crate::tools::patch::{apply_hunk, parse_hunks, Hunk, HunkLine};
+    }
+}
 
 fn truncate_body(text: &str, max_lines: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();

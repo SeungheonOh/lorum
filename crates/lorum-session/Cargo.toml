@@ -8,4 +8,5 @@ authors.workspace = true
 [dependencies]
 lorum-ai-contract = { path = "../lorum-ai-contract" }
 lorum-domain = { path = "../lorum-domain" }
+serde_json.workspace = true
 thiserror.workspace = true

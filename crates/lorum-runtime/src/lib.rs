@@ -194,6 +194,51 @@ impl ChatOnlyRuntime {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn inject_synthetic_tool_results_for_orphaned_calls(
+        &self,
+        session_id: &SessionId,
+        turn_id: &TurnId,
+        assistant_message: &AssistantMessage,
+        reason: &str,
+        history: &mut Vec<ProviderInputMessage>,
+        subscribers: &[Arc<dyn RuntimeSubscriber>],
+        seq: &mut u64,
+    ) -> Result<(), RuntimeError> {
+        let tool_calls: Vec<&ToolCall> = assistant_message
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                AssistantContent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .collect();
+
+        for tc in tool_calls {
+            let result = Value::String(reason.to_string());
+
+            self.persist_and_broadcast(
+                session_id,
+                RuntimeEvent::ToolResultReceived {
+                    turn_id: turn_id.clone(),
+                    sequence_no: *seq,
+                    tool_call_id: tc.id.clone(),
+                    is_error: true,
+                    result: result.clone(),
+                },
+                subscribers,
+            )?;
+            *seq += 1;
+
+            history.push(ProviderInputMessage::ToolResult {
+                tool_call_id: tc.id.clone(),
+                is_error: true,
+                result,
+            });
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -295,11 +340,35 @@ impl RuntimeController for ChatOnlyRuntime {
 
             let tool_executor = match &self.tool_executor {
                 Some(executor) if self.config.max_tool_turns > 0 => executor,
-                _ => break,
+                _ => {
+                    if let Some(ref msg) = result.assistant_message {
+                        self.inject_synthetic_tool_results_for_orphaned_calls(
+                            &cmd.session_id,
+                            &current_turn_id,
+                            msg,
+                            "Tool execution is not available",
+                            &mut history,
+                            &subscribers,
+                            &mut starting_sequence_no,
+                        )?;
+                    }
+                    break;
+                }
             };
 
             tool_turns += 1;
             if tool_turns > self.config.max_tool_turns {
+                if let Some(ref msg) = result.assistant_message {
+                    self.inject_synthetic_tool_results_for_orphaned_calls(
+                        &cmd.session_id,
+                        &current_turn_id,
+                        msg,
+                        "Maximum tool turns exceeded",
+                        &mut history,
+                        &subscribers,
+                        &mut starting_sequence_no,
+                    )?;
+                }
                 break;
             }
 
@@ -471,290 +540,5 @@ impl ProviderAdapter for ProviderAdapterHandle {
 
     fn supports_stateful_transport(&self) -> bool {
         self.inner.supports_stateful_transport()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use futures::executor::block_on;
-    use lorum_ai_contract::{
-        AssistantContent, AssistantMessage, AssistantMessageEvent, StopReason, StreamDoneEvent,
-        StreamTextDelta, TextContent, TokenUsage,
-    };
-    use lorum_session::InMemorySessionStore;
-
-    use super::*;
-
-    struct FixedAuthResolver;
-
-    #[async_trait]
-    impl RuntimeAuthResolver for FixedAuthResolver {
-        async fn get_api_key(
-            &self,
-            _provider: &str,
-            _session_id: &SessionId,
-        ) -> Result<Option<String>, String> {
-            Ok(Some("test-key".to_string()))
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingModelResolver {
-        seen_overrides: Mutex<Vec<Option<ModelRef>>>,
-    }
-
-    #[async_trait]
-    impl RuntimeModelResolver for RecordingModelResolver {
-        async fn resolve_model(
-            &self,
-            _session_id: &SessionId,
-            override_model: Option<&ModelRef>,
-        ) -> Result<ModelRef, String> {
-            self.seen_overrides
-                .lock()
-                .expect("lock model resolver")
-                .push(override_model.cloned());
-
-            if let Some(model) = override_model {
-                Ok(model.clone())
-            } else {
-                Ok(ModelRef {
-                    provider: "mock".to_string(),
-                    api: ApiKind::OpenAiResponses,
-                    model: "base-model".to_string(),
-                })
-            }
-        }
-    }
-
-    struct StaticProviderRegistry {
-        providers: HashMap<String, Arc<dyn ProviderAdapter>>,
-    }
-
-    impl RuntimeProviderRegistry for StaticProviderRegistry {
-        fn get_provider(&self, provider_id: &str) -> Option<Arc<dyn ProviderAdapter>> {
-            self.providers.get(provider_id).cloned()
-        }
-    }
-
-    struct MockProvider;
-
-    #[async_trait]
-    impl ProviderAdapter for MockProvider {
-        fn provider_id(&self) -> &str {
-            "mock"
-        }
-
-        fn api_kind(&self) -> ApiKind {
-            ApiKind::OpenAiResponses
-        }
-
-        async fn stream(
-            &self,
-            request: ProviderRequest,
-            _context: ProviderContext,
-            sink: &mut dyn AssistantEventSink,
-        ) -> Result<ProviderFinal, ProviderError> {
-            sink.push(AssistantMessageEvent::TextDelta(StreamTextDelta {
-                sequence_no: 1,
-                block_id: "b1".to_string(),
-                delta: format!("echo:{}", request.session_id),
-            }))
-            .map_err(|e| ProviderError::Transport {
-                message: e.to_string(),
-            })?;
-
-            let message = AssistantMessage {
-                message_id: "msg-1".to_string(),
-                model: request.model,
-                content: vec![AssistantContent::Text(TextContent {
-                    text: "ok".to_string(),
-                })],
-                usage: TokenUsage::default(),
-                stop_reason: StopReason::Stop,
-            };
-
-            sink.push(AssistantMessageEvent::Done(StreamDoneEvent {
-                sequence_no: 2,
-                message: message.clone(),
-            }))
-            .map_err(|e| ProviderError::Transport {
-                message: e.to_string(),
-            })?;
-
-            Ok(ProviderFinal {
-                message,
-                transport_details: None,
-            })
-        }
-
-        async fn complete(
-            &self,
-            _request: ProviderRequest,
-            _context: ProviderContext,
-        ) -> Result<AssistantMessage, ProviderError> {
-            Err(ProviderError::InvalidResponse {
-                message: "not used in runtime tests".to_string(),
-            })
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingSubscriber {
-        events: Mutex<Vec<RuntimeEvent>>,
-    }
-
-    impl RuntimeSubscriber for RecordingSubscriber {
-        fn on_event(&self, event: &RuntimeEvent) {
-            self.events
-                .lock()
-                .expect("lock subscriber")
-                .push(event.clone());
-        }
-    }
-
-    fn sample_command() -> UserInputCommand {
-        UserInputCommand {
-            session_id: SessionId::from("session-1"),
-            turn_id: TurnId::from("turn-1"),
-            prompt: "hello".to_string(),
-            system_prompt: None,
-        }
-    }
-
-    fn runtime_with_registry(
-        config: RuntimeConfig,
-        registry: Arc<dyn RuntimeProviderRegistry>,
-        model_resolver: Arc<dyn RuntimeModelResolver>,
-        session_store: Arc<dyn SessionStore>,
-    ) -> ChatOnlyRuntime {
-        ChatOnlyRuntime::new(
-            config,
-            Arc::new(FixedAuthResolver),
-            model_resolver,
-            registry,
-            session_store,
-            None,
-        )
-    }
-
-    #[test]
-    fn successful_submit_persists_and_broadcasts_events() {
-        block_on(async {
-            let mut providers: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
-            providers.insert("mock".to_string(), Arc::new(MockProvider));
-
-            let session_store: Arc<dyn SessionStore> = Arc::new(InMemorySessionStore::new());
-            let model_resolver = Arc::new(RecordingModelResolver::default());
-            let runtime = runtime_with_registry(
-                RuntimeConfig {
-                    max_tool_turns: 0,
-                    timeout_ms: 30_000,
-                },
-                Arc::new(StaticProviderRegistry { providers }),
-                model_resolver,
-                Arc::clone(&session_store),
-            );
-
-            let subscriber = Arc::new(RecordingSubscriber::default());
-            runtime
-                .subscribe(subscriber.clone())
-                .await
-                .expect("subscriber should register");
-
-            runtime
-                .submit_user_input(sample_command())
-                .await
-                .expect("submit should succeed");
-
-            let replayed = session_store
-                .replay(&SessionId::from("session-1"))
-                .expect("session replay should succeed");
-            assert_eq!(replayed.len(), 4);
-            assert!(matches!(
-                replayed[0],
-                RuntimeEvent::UserMessageReceived { .. }
-            ));
-            assert!(matches!(replayed[1], RuntimeEvent::TurnStarted { .. }));
-            assert!(matches!(
-                replayed[2],
-                RuntimeEvent::AssistantStreamDelta { .. }
-            ));
-            assert!(matches!(replayed[3], RuntimeEvent::TurnFinished { .. }));
-
-            let observed = subscriber.events.lock().expect("lock subscriber events");
-            assert_eq!(observed.len(), 4);
-            assert_eq!(*observed, replayed);
-        });
-    }
-
-    #[test]
-    fn provider_missing_returns_explicit_error() {
-        block_on(async {
-            let runtime = runtime_with_registry(
-                RuntimeConfig {
-                    max_tool_turns: 0,
-                    timeout_ms: 30_000,
-                },
-                Arc::new(StaticProviderRegistry {
-                    providers: HashMap::new(),
-                }),
-                Arc::new(RecordingModelResolver::default()),
-                Arc::new(InMemorySessionStore::new()),
-            );
-
-            let err = runtime
-                .submit_user_input(sample_command())
-                .await
-                .expect_err("missing provider should fail");
-            assert!(matches!(err, RuntimeError::ProviderNotFound { .. }));
-        });
-    }
-
-    #[test]
-    fn set_model_override_is_used_by_model_resolver() {
-        block_on(async {
-            let mut providers: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
-            providers.insert("mock".to_string(), Arc::new(MockProvider));
-
-            let model_resolver = Arc::new(RecordingModelResolver::default());
-            let runtime = runtime_with_registry(
-                RuntimeConfig {
-                    max_tool_turns: 0,
-                    timeout_ms: 30_000,
-                },
-                Arc::new(StaticProviderRegistry { providers }),
-                model_resolver.clone(),
-                Arc::new(InMemorySessionStore::new()),
-            );
-
-            let override_model = ModelRef {
-                provider: "mock".to_string(),
-                api: ApiKind::OpenAiResponses,
-                model: "override-model".to_string(),
-            };
-
-            runtime
-                .set_model(ModelSelectRequest {
-                    session_id: SessionId::from("session-1"),
-                    model: override_model.clone(),
-                })
-                .await
-                .expect("set_model should succeed");
-
-            runtime
-                .submit_user_input(sample_command())
-                .await
-                .expect("submit should succeed");
-
-            let seen = model_resolver
-                .seen_overrides
-                .lock()
-                .expect("lock seen overrides");
-            assert_eq!(seen.len(), 1);
-            assert_eq!(seen[0], Some(override_model));
-        });
     }
 }

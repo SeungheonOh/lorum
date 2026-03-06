@@ -1170,7 +1170,7 @@ fn openai_codex_headers(
     ]
 }
 
-fn chatgpt_account_id_from_access_token(access_token: &str) -> Result<String, ProviderError> {
+pub fn chatgpt_account_id_from_access_token(access_token: &str) -> Result<String, ProviderError> {
     let payload_segment = access_token
         .split('.')
         .nth(1)
@@ -1204,7 +1204,7 @@ fn chatgpt_account_id_from_access_token(access_token: &str) -> Result<String, Pr
 // OpenAI error handling
 // ---------------------------------------------------------------------------
 
-fn map_openai_error(error: &Value) -> ProviderError {
+pub fn map_openai_error(error: &Value) -> ProviderError {
     if let Some(detail) = error.get("detail") {
         let message = detail
             .as_str()
@@ -1335,7 +1335,7 @@ fn map_openai_stop_reason(label: Option<&str>) -> lorum_ai_contract::StopReason 
 
 // Batch version kept for tests
 #[allow(dead_code)]
-fn openai_codex_frames_from_events(
+pub fn openai_codex_frames_from_events(
     events: &[Value],
 ) -> Result<(Vec<OpenAiResponsesFrame>, Option<String>), ProviderError> {
     let mut sink = crate::CollectingFrameSink::default();
@@ -1467,62 +1467,6 @@ fn collect_openai_text_fallback(value: &Value, chunks: &mut Vec<String>) {
     }
 }
 
-// Batch version kept for tests
-#[allow(dead_code)]
-fn openai_frames_from_response(
-    response: &Value,
-) -> Result<Vec<OpenAiResponsesFrame>, ProviderError> {
-    let payload = response.get("response").unwrap_or(response);
-
-    if let Some(err_payload) = openai_error_payload_from_event(payload) {
-        return Err(map_openai_error(err_payload));
-    }
-
-    let message_id = payload
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("response")
-        .to_string();
-
-    let text = extract_openai_response_text(payload);
-
-    if text.is_empty() && payload.get("output").is_none() && payload.get("status").is_none() {
-        return Err(ProviderError::InvalidResponse {
-            message: format!(
-                "unexpected response format: {}",
-                serde_json::to_string_pretty(payload)
-                    .unwrap_or_else(|_| payload.to_string())
-            ),
-        });
-    }
-
-    let usage_json = payload.get("usage").cloned().unwrap_or(Value::Null);
-    let usage = parse_openai_usage(&usage_json);
-
-    let stop_reason = map_openai_stop_reason(
-        payload
-            .get("stop_reason")
-            .and_then(Value::as_str)
-            .or_else(|| payload.get("status").and_then(Value::as_str)),
-    );
-
-    let mut frames = Vec::new();
-    frames.push(OpenAiResponsesFrame::ResponseStart { message_id });
-    if !text.is_empty() {
-        let block_id = "text-0".to_string();
-        frames.push(OpenAiResponsesFrame::TextStart {
-            block_id: block_id.clone(),
-        });
-        frames.push(OpenAiResponsesFrame::TextDelta {
-            block_id: block_id.clone(),
-            delta: text,
-        });
-        frames.push(OpenAiResponsesFrame::TextEnd { block_id });
-    }
-    frames.push(OpenAiResponsesFrame::Completed { stop_reason, usage });
-    Ok(frames)
-}
-
 // ---------------------------------------------------------------------------
 // Tool definition formatting helpers
 // ---------------------------------------------------------------------------
@@ -1562,10 +1506,13 @@ fn anthropic_tool_definitions(tools: &[ToolDefinition]) -> Value {
 // Prompt formatting helpers
 // ---------------------------------------------------------------------------
 
-fn openai_codex_input(request: &ProviderRequest) -> Value {
+pub fn openai_codex_input(request: &ProviderRequest) -> Value {
+    let mut input = request.input.clone();
+    crate::shared::sanitize_tool_call_pairing(&mut input);
+
     let mut items = Vec::new();
 
-    for msg in &request.input {
+    for msg in &input {
         match msg {
             ProviderInputMessage::User { content } => items.push(serde_json::json!({
                 "type": "message",
@@ -1624,12 +1571,15 @@ fn openai_codex_input(request: &ProviderRequest) -> Value {
     Value::Array(items)
 }
 
-fn openai_prompt_input(request: &ProviderRequest) -> Value {
+pub fn openai_prompt_input(request: &ProviderRequest) -> Value {
     // Use structured input (same shape as codex) for tool calling support.
     // The OpenAI Responses API accepts either a string or an array for `input`.
+    let mut input = request.input.clone();
+    crate::shared::sanitize_tool_call_pairing(&mut input);
+
     let mut items = Vec::new();
 
-    for msg in &request.input {
+    for msg in &input {
         match msg {
             ProviderInputMessage::User { content } => items.push(serde_json::json!({
                 "type": "message",
@@ -1688,10 +1638,13 @@ fn openai_prompt_input(request: &ProviderRequest) -> Value {
     Value::Array(items)
 }
 
-fn anthropic_prompt_parts(request: &ProviderRequest) -> (Option<String>, Vec<Value>) {
+pub fn anthropic_prompt_parts(request: &ProviderRequest) -> (Option<String>, Vec<Value>) {
+    let mut input = request.input.clone();
+    crate::shared::sanitize_tool_call_pairing(&mut input);
+
     let mut messages = Vec::new();
 
-    for msg in &request.input {
+    for msg in &input {
         match msg {
             ProviderInputMessage::User { content } => messages.push(serde_json::json!({
                 "role": "user",
@@ -1766,7 +1719,7 @@ fn default_openai_model() -> ModelRef {
     }
 }
 
-fn default_codex_model() -> ModelRef {
+pub fn default_codex_model() -> ModelRef {
     ModelRef {
         provider: "openai".to_string(),
         api: ApiKind::OpenAiCodexResponses,
@@ -1809,7 +1762,7 @@ fn env_first_non_empty(keys: &[&str]) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
-fn parse_sse_json_events(body: &str) -> Result<Vec<Value>, ProviderError> {
+pub fn parse_sse_json_events(body: &str) -> Result<Vec<Value>, ProviderError> {
     let mut events = Vec::new();
     let mut current_data = Vec::new();
 
@@ -1860,281 +1813,4 @@ fn parse_sse_json_events(body: &str) -> Result<Vec<Value>, ProviderError> {
     }
 
     Ok(events)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn openai_scope_error_maps_to_auth_error() {
-        let error = serde_json::json!({
-            "code": "unknown",
-            "message": "Missing scopes: api.responses.write",
-        });
-
-        let mapped = map_openai_error(&error);
-        assert!(matches!(mapped, ProviderError::Auth { .. }));
-    }
-
-    #[test]
-    fn codex_account_id_claim_is_extracted_from_oauth_token() {
-        let token =
-            "x.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xMjMifX0.y";
-        let account_id =
-            chatgpt_account_id_from_access_token(token).expect("extract account id from jwt");
-        assert_eq!(account_id, "acct_123");
-    }
-    #[test]
-    fn sse_event_parser_reads_json_events_and_done_marker() {
-        let body = concat!(
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
-            "data: [DONE]\n\n"
-        );
-
-        let events = parse_sse_json_events(body).expect("parse sse events");
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0]
-                .get("response")
-                .and_then(|response| response.get("id"))
-                .and_then(Value::as_str),
-            Some("resp_1")
-        );
-        assert_eq!(
-            events[1].get("delta").and_then(Value::as_str),
-            Some("hello")
-        );
-    }
-
-    #[test]
-    fn codex_stream_events_map_to_text_and_completed_frames() {
-        let events = vec![
-            serde_json::json!({
-                "type": "response.created",
-                "response": {"id": "resp_sse"}
-            }),
-            serde_json::json!({
-                "type": "response.output_text.delta",
-                "delta": "hello"
-            }),
-            serde_json::json!({
-                "type": "response.completed",
-                "response": {
-                    "id": "resp_sse",
-                    "status": "completed",
-                    "usage": {
-                        "input_tokens": 8,
-                        "output_tokens": 2,
-                        "total_tokens": 10,
-                        "input_tokens_details": {"cached_tokens": 3}
-                    }
-                }
-            }),
-        ];
-
-        let (frames, response_id) =
-            openai_codex_frames_from_events(&events).expect("map codex events to frames");
-        assert_eq!(response_id.as_deref(), Some("resp_sse"));
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::TextDelta { delta, .. } if delta == "hello"
-        )));
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::Completed { usage, .. }
-                if usage.input_tokens == 5 && usage.cache_read_tokens == 3 && usage.output_tokens == 2
-        )));
-    }
-
-    #[test]
-    fn codex_reasoning_events_produce_reasoning_frames() {
-        let events = vec![
-            serde_json::json!({
-                "type": "response.created",
-                "response": {"id": "resp_think"}
-            }),
-            serde_json::json!({
-                "type": "response.reasoning_summary_text.delta",
-                "delta": "thinking about "
-            }),
-            serde_json::json!({
-                "type": "response.reasoning_summary_text.delta",
-                "delta": "the answer"
-            }),
-            serde_json::json!({
-                "type": "response.reasoning_summary_text.done"
-            }),
-            serde_json::json!({
-                "type": "response.output_text.delta",
-                "delta": "Hello!"
-            }),
-            serde_json::json!({
-                "type": "response.completed",
-                "response": {
-                    "id": "resp_think",
-                    "status": "completed",
-                    "usage": {"input_tokens": 5, "output_tokens": 2}
-                }
-            }),
-        ];
-
-        let (frames, _) =
-            openai_codex_frames_from_events(&events).expect("map reasoning events");
-
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::ReasoningStart { .. }
-        )));
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::ReasoningDelta { delta, .. } if delta == "thinking about "
-        )));
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::ReasoningEnd { .. }
-        )));
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::TextDelta { delta, .. } if delta == "Hello!"
-        )));
-    }
-
-    #[test]
-    fn frame_parser_extracts_text_from_text_and_refusal_blocks() {
-        let response = serde_json::json!({
-            "id": "resp_text",
-            "output": [
-                {
-                    "type": "message",
-                    "content": [
-                        {"type": "text", "text": "hello"},
-                        {"type": "refusal", "refusal": "cannot comply"}
-                    ]
-                }
-            ],
-            "usage": {
-                "input_tokens": 7,
-                "output_tokens": 5
-            }
-        });
-
-        let frames = openai_frames_from_response(&response).unwrap();
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::TextDelta { delta, .. } if delta == "hello\ncannot comply"
-        )));
-    }
-
-    #[test]
-    fn frame_parser_reads_nested_response_wrapper_and_output_text() {
-        let response = serde_json::json!({
-            "response": {
-                "id": "resp_wrapped",
-                "output_text": "wrapped hello",
-                "status": "completed",
-                "usage": {"input_tokens": 1, "output_tokens": 1}
-            }
-        });
-
-        let frames = openai_frames_from_response(&response).unwrap();
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::ResponseStart { message_id } if message_id == "resp_wrapped"
-        )));
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::TextDelta { delta, .. } if delta == "wrapped hello"
-        )));
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::Completed { stop_reason, .. } if *stop_reason == lorum_ai_contract::StopReason::Stop
-        )));
-    }
-    #[test]
-    fn frame_parser_extracts_text_from_item_wrapper_with_object_text() {
-        let response = serde_json::json!({
-            "id": "resp_item",
-            "output": [
-                {
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "message",
-                        "content": [
-                            {"type": "output_text", "text": {"value": "wrapped text"}}
-                        ]
-                    }
-                }
-            ],
-            "status": "completed"
-        });
-
-        let frames = openai_frames_from_response(&response).unwrap();
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::TextDelta { delta, .. } if delta == "wrapped text"
-        )));
-    }
-
-    #[test]
-    fn codex_input_uses_message_array_shape() {
-        let request = ProviderRequest {
-            session_id: "session-1".to_string(),
-            model: default_codex_model(),
-            system_prompt: None,
-            input: vec![ProviderInputMessage::User {
-                content: "hello codex".to_string(),
-            }],
-            tools: vec![],
-        };
-
-        let input = openai_codex_input(&request);
-        assert!(matches!(input, Value::Array(_)));
-        let first = input
-            .as_array()
-            .and_then(|items| items.first())
-            .expect("first input item exists");
-        assert_eq!(first.get("type").and_then(Value::as_str), Some("message"));
-        assert_eq!(first.get("role").and_then(Value::as_str), Some("user"));
-        assert_eq!(
-            first
-                .get("content")
-                .and_then(Value::as_array)
-                .and_then(|content| content.first())
-                .and_then(|part| part.get("type"))
-                .and_then(Value::as_str),
-            Some("input_text")
-        );
-    }
-    #[test]
-    fn frame_parser_fallback_recovers_text_from_untyped_nested_fields() {
-        let response = serde_json::json!({
-            "id": "resp_fallback",
-            "output": [
-                {
-                    "type": "message",
-                    "content": [
-                        {"note": {"text": "fallback text"}}
-                    ]
-                }
-            ],
-            "status": "completed"
-        });
-
-        let frames = openai_frames_from_response(&response).unwrap();
-        assert!(frames.iter().any(|frame| matches!(
-            frame,
-            OpenAiResponsesFrame::TextDelta { delta, .. } if delta == "fallback text"
-        )));
-    }
-    #[test]
-    fn catalog_exposes_default_and_named_presets() {
-        let catalog = build_curl_provider_catalog();
-        assert!(catalog.default_model().is_some());
-        assert!(catalog.preset_model("openai").is_some());
-        assert!(catalog.preset_model("codex").is_some());
-        assert!(catalog.preset_model("anthropic").is_some());
-        assert!(catalog.preset_model("minimax").is_some());
-    }
 }

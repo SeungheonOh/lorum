@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -368,427 +369,50 @@ pub trait ProviderAdapter: Send + Sync {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Scan `messages` for assistant tool calls that have no corresponding `ToolResult`
+/// and inject a synthetic error result immediately after each orphaned assistant message.
+pub fn patch_orphaned_tool_calls(messages: &mut Vec<ProviderInputMessage>, reason: &str) {
+    // 1. Collect all tool_call_ids that already have a ToolResult
+    let matched_ids: HashSet<String> = messages
+        .iter()
+        .filter_map(|m| match m {
+            ProviderInputMessage::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
+            _ => None,
+        })
+        .collect();
 
-    fn sample_model_ref() -> ModelRef {
-        ModelRef {
-            provider: "openai".to_string(),
-            api: ApiKind::OpenAiResponses,
-            model: "gpt-5.2".to_string(),
+    // 2. Walk messages, find orphaned tool call IDs and their insertion points
+    let mut insertions: Vec<(usize, Vec<ProviderInputMessage>)> = Vec::new();
+
+    for (idx, msg) in messages.iter().enumerate() {
+        if let ProviderInputMessage::Assistant { message } = msg {
+            let orphans: Vec<&ToolCall> = message
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    AssistantContent::ToolCall(tc) if !matched_ids.contains(&tc.id) => Some(tc),
+                    _ => None,
+                })
+                .collect();
+
+            if !orphans.is_empty() {
+                let synthetics: Vec<ProviderInputMessage> = orphans
+                    .into_iter()
+                    .map(|tc| ProviderInputMessage::ToolResult {
+                        tool_call_id: tc.id.clone(),
+                        is_error: true,
+                        result: Value::String(reason.to_string()),
+                    })
+                    .collect();
+                insertions.push((idx + 1, synthetics));
+            }
         }
     }
 
-    fn sample_message(stop_reason: StopReason) -> AssistantMessage {
-        AssistantMessage {
-            message_id: "m-1".to_string(),
-            model: sample_model_ref(),
-            content: vec![AssistantContent::Text(TextContent {
-                text: "hello".to_string(),
-            })],
-            usage: TokenUsage {
-                input_tokens: 10,
-                output_tokens: 5,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                total_tokens: None,
-                cost_usd: None,
-            },
-            stop_reason,
+    // 3. Insert in reverse order to keep indices stable
+    for (insert_at, synthetics) in insertions.into_iter().rev() {
+        for (offset, synthetic) in synthetics.into_iter().enumerate() {
+            messages.insert(insert_at + offset, synthetic);
         }
-    }
-
-    fn event_with_sequence(event: AssistantMessageEvent) -> AssistantMessageEvent {
-        event
-    }
-
-    #[test]
-    fn api_kind_roundtrip_strings() {
-        let all = [
-            ApiKind::OpenAiCompletions,
-            ApiKind::OpenAiResponses,
-            ApiKind::OpenAiCodexResponses,
-            ApiKind::AzureOpenAiResponses,
-            ApiKind::AnthropicMessages,
-            ApiKind::BedrockConverseStream,
-            ApiKind::GoogleGenerativeAi,
-            ApiKind::GoogleGeminiCli,
-            ApiKind::GoogleVertex,
-            ApiKind::CursorAgent,
-            ApiKind::MiniMaxMessages,
-        ];
-
-        for kind in all {
-            let as_string = kind.to_string();
-            let parsed: ApiKind = as_string.parse().expect("must parse");
-            assert_eq!(parsed, kind);
-        }
-    }
-
-    #[test]
-    fn api_kind_parse_unknown_fails() {
-        let err = "not-real".parse::<ApiKind>().expect_err("must fail");
-        assert_eq!(err.value, "not-real");
-        assert_eq!(err.to_string(), "unknown api kind: not-real");
-    }
-
-    #[test]
-    fn stop_reason_json_roundtrip() {
-        let all = [
-            StopReason::Stop,
-            StopReason::Length,
-            StopReason::ToolUse,
-            StopReason::Error,
-            StopReason::Aborted,
-        ];
-
-        for reason in all {
-            let json = serde_json::to_string(&reason).expect("serialize reason");
-            let back: StopReason = serde_json::from_str(&json).expect("deserialize reason");
-            assert_eq!(back, reason);
-        }
-    }
-
-    #[test]
-    fn token_usage_computed_total_prefers_explicit_total() {
-        let usage = TokenUsage {
-            input_tokens: 1,
-            output_tokens: 2,
-            cache_read_tokens: 3,
-            cache_write_tokens: 4,
-            total_tokens: Some(99),
-            cost_usd: None,
-        };
-
-        assert_eq!(usage.computed_total_tokens(), 99);
-    }
-
-    #[test]
-    fn token_usage_computed_total_falls_back_to_sum() {
-        let usage = TokenUsage {
-            input_tokens: 1,
-            output_tokens: 2,
-            cache_read_tokens: 3,
-            cache_write_tokens: 4,
-            total_tokens: None,
-            cost_usd: None,
-        };
-
-        assert_eq!(usage.computed_total_tokens(), 10);
-    }
-
-    #[test]
-    fn token_usage_has_any_usage_detects_cost() {
-        let usage = TokenUsage {
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            total_tokens: None,
-            cost_usd: Some(0.001),
-        };
-
-        assert!(usage.has_any_usage());
-    }
-
-    #[test]
-    fn token_usage_has_any_usage_detects_none() {
-        let usage = TokenUsage::default();
-        assert!(!usage.has_any_usage());
-    }
-
-    #[test]
-    fn assistant_content_serializes_with_tagged_union() {
-        let content = AssistantContent::ToolCall(ToolCall {
-            id: "tc-1".to_string(),
-            name: "grep".to_string(),
-            arguments: serde_json::json!({"path":"src"}),
-        });
-
-        let json = serde_json::to_value(content).expect("serialize content");
-        assert_eq!(json["type"], "tool_call");
-    }
-
-    #[test]
-    fn assistant_event_sequence_number_is_extracted_for_each_variant() {
-        let cases = vec![
-            event_with_sequence(AssistantMessageEvent::Start(StreamStartEvent {
-                sequence_no: 1,
-                message_id: "m".to_string(),
-                model: sample_model_ref(),
-            })),
-            event_with_sequence(AssistantMessageEvent::TextStart(StreamBoundaryEvent {
-                sequence_no: 2,
-                block_id: "b".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::TextDelta(StreamTextDelta {
-                sequence_no: 3,
-                block_id: "b".to_string(),
-                delta: "a".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::TextEnd(StreamBoundaryEvent {
-                sequence_no: 4,
-                block_id: "b".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::ThinkingStart(StreamBoundaryEvent {
-                sequence_no: 5,
-                block_id: "t".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::ThinkingDelta(StreamThinkingDelta {
-                sequence_no: 6,
-                block_id: "t".to_string(),
-                delta: "b".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::ThinkingEnd(StreamBoundaryEvent {
-                sequence_no: 7,
-                block_id: "t".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::ToolCallStart(StreamBoundaryEvent {
-                sequence_no: 8,
-                block_id: "tc".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::ToolCallDelta(StreamToolCallDelta {
-                sequence_no: 9,
-                block_id: "tc".to_string(),
-                delta: "{".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::ToolCallEnd(StreamBoundaryEvent {
-                sequence_no: 10,
-                block_id: "tc".to_string(),
-            })),
-            event_with_sequence(AssistantMessageEvent::Done(StreamDoneEvent {
-                sequence_no: 11,
-                message: sample_message(StopReason::Stop),
-            })),
-            event_with_sequence(AssistantMessageEvent::Error(StreamErrorEvent {
-                sequence_no: 12,
-                code: "transport".to_string(),
-                message: "broken".to_string(),
-                retryable: true,
-            })),
-        ];
-
-        let observed: Vec<u64> = cases
-            .iter()
-            .map(AssistantMessageEvent::sequence_no)
-            .collect();
-        assert_eq!(observed, (1..=12).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn assistant_event_terminal_detection_is_precise() {
-        let done = AssistantMessageEvent::Done(StreamDoneEvent {
-            sequence_no: 1,
-            message: sample_message(StopReason::Stop),
-        });
-        let err = AssistantMessageEvent::Error(StreamErrorEvent {
-            sequence_no: 2,
-            code: "x".to_string(),
-            message: "y".to_string(),
-            retryable: false,
-        });
-        let delta = AssistantMessageEvent::TextDelta(StreamTextDelta {
-            sequence_no: 3,
-            block_id: "b".to_string(),
-            delta: "z".to_string(),
-        });
-
-        assert!(done.is_terminal());
-        assert!(err.is_terminal());
-        assert!(!delta.is_terminal());
-    }
-
-    #[test]
-    fn assistant_event_stop_reason_uses_done_message_reason() {
-        let event = AssistantMessageEvent::Done(StreamDoneEvent {
-            sequence_no: 1,
-            message: sample_message(StopReason::ToolUse),
-        });
-
-        assert_eq!(event.stop_reason(), Some(StopReason::ToolUse));
-    }
-
-    #[test]
-    fn assistant_event_stop_reason_maps_error_to_error() {
-        let event = AssistantMessageEvent::Error(StreamErrorEvent {
-            sequence_no: 1,
-            code: "auth".to_string(),
-            message: "bad key".to_string(),
-            retryable: false,
-        });
-
-        assert_eq!(event.stop_reason(), Some(StopReason::Error));
-    }
-
-    #[test]
-    fn assistant_event_stop_reason_non_terminal_is_none() {
-        let event = AssistantMessageEvent::TextStart(StreamBoundaryEvent {
-            sequence_no: 1,
-            block_id: "b1".to_string(),
-        });
-
-        assert_eq!(event.stop_reason(), None);
-    }
-
-    #[test]
-    fn provider_error_display_is_stable() {
-        let err = ProviderError::Transport {
-            message: "timeout".to_string(),
-        };
-        assert_eq!(err.to_string(), "transport failure: timeout");
-    }
-
-    #[test]
-    fn provider_error_serialization_uses_kind_tag() {
-        let err = ProviderError::RateLimited {
-            message: "quota".to_string(),
-        };
-        let json = serde_json::to_value(err).expect("serialize provider error");
-        assert_eq!(json["kind"], "rate_limited");
-    }
-
-    #[test]
-    fn stream_error_event_roundtrip_json() {
-        let event = AssistantMessageEvent::Error(StreamErrorEvent {
-            sequence_no: 44,
-            code: "rate_limited".to_string(),
-            message: "try later".to_string(),
-            retryable: true,
-        });
-
-        let json = serde_json::to_string(&event).expect("serialize event");
-        let back: AssistantMessageEvent = serde_json::from_str(&json).expect("deserialize event");
-        assert_eq!(back, event);
-    }
-
-    #[test]
-    fn assistant_message_roundtrip_json() {
-        let message = sample_message(StopReason::Stop);
-        let json = serde_json::to_string(&message).expect("serialize message");
-        let back: AssistantMessage = serde_json::from_str(&json).expect("deserialize message");
-        assert_eq!(back, message);
-    }
-
-    #[test]
-    fn provider_context_supports_optional_api_key() {
-        let ctx = ProviderContext {
-            api_key: None,
-            timeout_ms: 30_000,
-        };
-
-        let json = serde_json::to_string(&ctx).expect("serialize context");
-        assert!(json.contains("timeout_ms"));
-    }
-
-    #[test]
-    fn model_ref_roundtrip_json() {
-        let model = sample_model_ref();
-        let json = serde_json::to_string(&model).expect("serialize model ref");
-        let back: ModelRef = serde_json::from_str(&json).expect("deserialize model ref");
-        assert_eq!(back, model);
-    }
-
-    #[test]
-    fn assistant_message_event_json_contains_type_discriminator() {
-        let event = AssistantMessageEvent::TextDelta(StreamTextDelta {
-            sequence_no: 3,
-            block_id: "b".to_string(),
-            delta: "abc".to_string(),
-        });
-
-        let json = serde_json::to_value(event).expect("serialize event");
-        assert_eq!(json["type"], "text_delta");
-    }
-
-    #[test]
-    fn computed_total_tokens_handles_zero_explicit_total() {
-        let usage = TokenUsage {
-            input_tokens: 10,
-            output_tokens: 5,
-            cache_read_tokens: 1,
-            cache_write_tokens: 1,
-            total_tokens: Some(0),
-            cost_usd: None,
-        };
-
-        assert_eq!(usage.computed_total_tokens(), 0);
-    }
-
-    #[test]
-    fn usage_has_any_usage_when_total_tokens_set() {
-        let usage = TokenUsage {
-            total_tokens: Some(123),
-            ..TokenUsage::default()
-        };
-
-        assert!(usage.has_any_usage());
-    }
-
-    #[test]
-    fn assistant_message_can_hold_multiple_content_blocks() {
-        let message = AssistantMessage {
-            message_id: "m-2".to_string(),
-            model: sample_model_ref(),
-            content: vec![
-                AssistantContent::Thinking(ThinkingContent {
-                    text: "hmm".to_string(),
-                }),
-                AssistantContent::ToolCall(ToolCall {
-                    id: "tc".to_string(),
-                    name: "read".to_string(),
-                    arguments: serde_json::json!({ "path": "src/lib.rs" }),
-                }),
-            ],
-            usage: TokenUsage::default(),
-            stop_reason: StopReason::ToolUse,
-        };
-
-        assert_eq!(message.content.len(), 2);
-    }
-
-    #[test]
-    fn provider_transport_details_roundtrip_json() {
-        let details = ProviderTransportDetails {
-            transport: "websocket".to_string(),
-            reused_provider_session: true,
-        };
-
-        let json = serde_json::to_string(&details).expect("serialize details");
-        let back: ProviderTransportDetails =
-            serde_json::from_str(&json).expect("deserialize details");
-        assert_eq!(back, details);
-    }
-
-    #[test]
-    fn provider_final_roundtrip_json() {
-        let final_msg = ProviderFinal {
-            message: sample_message(StopReason::Stop),
-            transport_details: Some(ProviderTransportDetails {
-                transport: "sse".to_string(),
-                reused_provider_session: false,
-            }),
-        };
-
-        let json = serde_json::to_string(&final_msg).expect("serialize final");
-        let back: ProviderFinal = serde_json::from_str(&json).expect("deserialize final");
-        assert_eq!(back, final_msg);
-    }
-
-    #[test]
-    fn provider_request_roundtrip_json() {
-        let req = ProviderRequest {
-            session_id: "s-1".to_string(),
-            model: sample_model_ref(),
-            system_prompt: Some("You are a helpful assistant.".to_string()),
-            input: vec![ProviderInputMessage::User {
-                content: "hello".to_string(),
-            }],
-            tools: vec![],
-        };
-
-        let json = serde_json::to_string(&req).expect("serialize request");
-        let back: ProviderRequest = serde_json::from_str(&json).expect("deserialize request");
-        assert_eq!(back, req);
     }
 }

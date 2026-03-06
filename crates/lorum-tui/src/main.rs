@@ -1,5 +1,3 @@
-mod commands;
-mod deps;
 mod input;
 mod render;
 mod subscriber;
@@ -8,6 +6,7 @@ use std::sync::Arc;
 
 use lorum_domain::SessionId;
 use lorum_runtime::{ModelSelectRequest, RuntimeController};
+use lorum_tui::{commands, deps};
 use tokio::runtime::Runtime;
 
 use crate::input::InputSignal;
