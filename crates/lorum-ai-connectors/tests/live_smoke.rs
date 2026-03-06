@@ -35,6 +35,7 @@ fn sample_request(api: ApiKind, provider: &str, model: &str) -> ProviderRequest 
             content: "ping".to_string(),
         }],
         tools: vec![],
+        tool_choice: None,
     }
 }
 

@@ -156,6 +156,7 @@ fn codex_input_uses_message_array_shape() {
             content: "hello codex".to_string(),
         }],
         tools: vec![],
+        tool_choice: None,
     };
 
     let input = openai_codex_input(&request);
@@ -220,6 +221,7 @@ fn request_with_orphaned_tool_calls() -> ProviderRequest {
             // No ToolResult for tc-orphan -- this is the orphan
         ],
         tools: vec![],
+        tool_choice: None,
     }
 }
 

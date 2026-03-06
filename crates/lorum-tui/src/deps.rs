@@ -13,8 +13,10 @@ use lorum_ai_connectors::build_curl_provider_catalog;
 use lorum_ai_contract::{ModelRef, ProviderAdapter};
 use lorum_domain::SessionId;
 use lorum_runtime::{
+    agents::builtin_agents,
+    subagent::{SubagentExecutor, SubagentHandler, SubmitResultHandler},
     ChatOnlyRuntime, RuntimeAuthResolver, RuntimeConfig, RuntimeModelResolver,
-    RuntimeProviderRegistry, ToolCallDisplay,
+    RuntimeProviderRegistry, ToolCallDisplay, ToolDispatcher,
 };
 use lorum_session::{InMemorySessionStore, SessionStore};
 
@@ -129,16 +131,40 @@ pub fn build_app_deps() -> Result<AppDeps, String> {
     let tool_executor: Arc<dyn lorum_runtime::ToolExecutor> = Arc::clone(&tool_registry) as _;
     let tool_display: Arc<dyn ToolCallDisplay> = tool_registry;
 
+    let config = RuntimeConfig {
+        max_tool_turns: 25,
+        timeout_ms: 120_000,
+        max_output_bytes: lorum_runtime::subagent::DEFAULT_MAX_OUTPUT_BYTES,
+        max_output_lines: lorum_runtime::subagent::DEFAULT_MAX_OUTPUT_LINES,
+    };
+
+    let dispatcher = Arc::new(ToolDispatcher::new(tool_executor));
+
+    let subagent_executor = Arc::new(SubagentExecutor::new(
+        Arc::clone(&auth_resolver),
+        Arc::clone(&model_resolver),
+        Arc::clone(&provider_registry),
+        Arc::clone(&session_store),
+        config,
+    ));
+
+    let max_recursion_depth = 2;
+    dispatcher.register(Arc::new(SubagentHandler::new(
+        subagent_executor,
+        builtin_agents(),
+        max_recursion_depth,
+        Arc::clone(&dispatcher),
+        lorum_tools::task_definition(),
+    )));
+    dispatcher.register(Arc::new(SubmitResultHandler));
+
     let runtime = ChatOnlyRuntime::new(
-        RuntimeConfig {
-            max_tool_turns: 25,
-            timeout_ms: 120_000,
-        },
+        config,
         auth_resolver,
         model_resolver,
         provider_registry,
         Arc::clone(&session_store),
-        Some(tool_executor),
+        Some(dispatcher),
     );
 
     Ok(AppDeps {

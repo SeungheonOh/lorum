@@ -1,10 +1,6 @@
-use std::path::Path;
-
 use lorum_ai_contract::ToolDefinition;
 use lorum_runtime::ToolCallSummary;
 use serde_json::{json, Value};
-
-use crate::ToolOutput;
 
 const VALID_AGENTS: &[&str] = &[
     "explore", "plan", "reviewer", "task", "designer", "oracle", "librarian",
@@ -83,26 +79,4 @@ pub fn format_call(args: &Value) -> ToolCallSummary {
 pub fn format_result(_is_error: bool, result: &Value) -> String {
     let text = result.as_str().unwrap_or("");
     crate::display_preview(text, 200)
-}
-
-pub async fn execute(args: Value, _cwd: &Path) -> ToolOutput {
-    let agent = match args.get("agent").and_then(Value::as_str) {
-        Some(a) => a,
-        None => return ToolOutput::err("missing required parameter: agent"),
-    };
-
-    if !VALID_AGENTS.contains(&agent) {
-        return ToolOutput::err(format!(
-            "invalid agent type '{agent}'. Must be one of: {}",
-            VALID_AGENTS.join(", ")
-        ));
-    }
-
-    match args.get("tasks").and_then(Value::as_array) {
-        Some(t) if !t.is_empty() => {}
-        Some(_) => return ToolOutput::err("tasks array must not be empty"),
-        None => return ToolOutput::err("missing required parameter: tasks"),
-    };
-
-    ToolOutput::err("agent orchestration not yet available")
 }

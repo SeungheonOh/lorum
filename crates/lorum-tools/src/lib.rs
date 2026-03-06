@@ -10,6 +10,11 @@ use serde_json::Value;
 pub mod cid;
 mod tools;
 
+/// Returns the `task` tool definition for use by the SubagentHandler.
+pub fn task_definition() -> lorum_ai_contract::ToolDefinition {
+    tools::task::definition()
+}
+
 /// Internal helpers re-exported for integration tests.
 #[doc(hidden)]
 pub mod internals {
@@ -133,9 +138,7 @@ impl ToolRegistry {
         });
 
         // Agent orchestration
-        self.register("task", |args, cwd, _timeout| {
-            Box::pin(tools::task::execute(args, cwd))
-        });
+        // "task" is handled by SubagentHandler via ToolDispatcher
         self.register("await", |args, cwd, _timeout| {
             Box::pin(tools::await_tool::execute(args, cwd))
         });
@@ -213,7 +216,7 @@ impl ToolExecutor for ToolRegistry {
             tools::web_search::definition(),
             tools::fetch::definition(),
             // Agent orchestration
-            tools::task::definition(),
+            // "task" definition is provided by SubagentHandler via ToolDispatcher
             tools::await_tool::definition(),
             tools::cancel_job::definition(),
             // State & flow control

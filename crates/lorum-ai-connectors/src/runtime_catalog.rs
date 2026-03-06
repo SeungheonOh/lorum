@@ -8,7 +8,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
 use lorum_ai_contract::{
     ApiKind, AssistantContent, AssistantEventSink, AssistantMessage, ModelRef, ProviderAdapter,
-    ProviderContext, ProviderError, ProviderInputMessage, ProviderRequest, ToolDefinition,
+    ProviderContext, ProviderError, ProviderInputMessage, ProviderRequest, ToolChoice,
+    ToolDefinition,
 };
 use serde_json::Value;
 
@@ -202,6 +203,9 @@ impl OpenAiResponsesTransport for ReqwestOpenAiTransport {
         if !request.tools.is_empty() {
             payload["tools"] = openai_tool_definitions(&request.tools);
         }
+        if let Some(ref tc) = request.tool_choice {
+            payload["tool_choice"] = openai_tool_choice(tc);
+        }
 
         let mut emitter = OpenAiSseToFrameEmitter::new(sink);
         stream_sse_events(
@@ -306,6 +310,9 @@ impl AnthropicTransport for ReqwestAnthropicTransport {
         if !request.tools.is_empty() {
             payload["tools"] = anthropic_tool_definitions(&request.tools);
         }
+        if let Some(ref tc) = request.tool_choice {
+            payload["tool_choice"] = anthropic_tool_choice(tc);
+        }
 
         let mut emitter = AnthropicSseToFrameEmitter::new(sink);
         stream_sse_events(
@@ -353,6 +360,9 @@ impl AnthropicTransport for ReqwestMiniMaxTransport {
         }
         if !request.tools.is_empty() {
             payload["tools"] = anthropic_tool_definitions(&request.tools);
+        }
+        if let Some(ref tc) = request.tool_choice {
+            payload["tool_choice"] = anthropic_tool_choice(tc);
         }
 
         let mut emitter = AnthropicSseToFrameEmitter::new(sink);
@@ -1485,6 +1495,28 @@ fn openai_tool_definitions(tools: &[ToolDefinition]) -> Value {
             })
             .collect(),
     )
+}
+
+fn openai_tool_choice(choice: &ToolChoice) -> Value {
+    match choice {
+        ToolChoice::Auto => Value::String("auto".to_string()),
+        ToolChoice::Required => Value::String("required".to_string()),
+        ToolChoice::Specific { name } => serde_json::json!({
+            "type": "function",
+            "function": { "name": name }
+        }),
+    }
+}
+
+fn anthropic_tool_choice(choice: &ToolChoice) -> Value {
+    match choice {
+        ToolChoice::Auto => serde_json::json!({ "type": "auto" }),
+        ToolChoice::Required => serde_json::json!({ "type": "any" }),
+        ToolChoice::Specific { name } => serde_json::json!({
+            "type": "tool",
+            "name": name
+        }),
+    }
 }
 
 fn anthropic_tool_definitions(tools: &[ToolDefinition]) -> Value {

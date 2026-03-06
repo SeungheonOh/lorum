@@ -438,6 +438,7 @@ fn provider_request_roundtrip_json() {
             content: "hello".to_string(),
         }],
         tools: vec![],
+        tool_choice: None,
     };
 
     let json = serde_json::to_string(&req).expect("serialize request");

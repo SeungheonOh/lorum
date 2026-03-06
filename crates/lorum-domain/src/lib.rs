@@ -115,6 +115,24 @@ pub enum RuntimeEvent {
         from_session_id: SessionId,
         to_session_id: SessionId,
     },
+    SubagentSpawned {
+        turn_id: TurnId,
+        sequence_no: u64,
+        session_id: SessionId,
+        child_session_id: SessionId,
+        tool_call_id: String,
+        agent_type: String,
+        task_id: String,
+    },
+    SubagentCompleted {
+        turn_id: TurnId,
+        sequence_no: u64,
+        session_id: SessionId,
+        child_session_id: SessionId,
+        tool_call_id: String,
+        agent_type: String,
+        status: String,
+    },
 }
 
 impl RuntimeEvent {
@@ -129,7 +147,9 @@ impl RuntimeEvent {
             | RuntimeEvent::ToolExecutionStart { sequence_no, .. }
             | RuntimeEvent::ToolExecutionEnd { sequence_no, .. }
             | RuntimeEvent::ToolResultReceived { sequence_no, .. }
-            | RuntimeEvent::SessionSwitched { sequence_no, .. } => *sequence_no,
+            | RuntimeEvent::SessionSwitched { sequence_no, .. }
+            | RuntimeEvent::SubagentSpawned { sequence_no, .. }
+            | RuntimeEvent::SubagentCompleted { sequence_no, .. } => *sequence_no,
         }
     }
 
@@ -143,7 +163,9 @@ impl RuntimeEvent {
             | RuntimeEvent::RuntimeError { turn_id, .. }
             | RuntimeEvent::ToolExecutionStart { turn_id, .. }
             | RuntimeEvent::ToolExecutionEnd { turn_id, .. }
-            | RuntimeEvent::ToolResultReceived { turn_id, .. } => Some(turn_id),
+            | RuntimeEvent::ToolResultReceived { turn_id, .. }
+            | RuntimeEvent::SubagentSpawned { turn_id, .. }
+            | RuntimeEvent::SubagentCompleted { turn_id, .. } => Some(turn_id),
             RuntimeEvent::SessionSwitched { .. } => None,
         }
     }

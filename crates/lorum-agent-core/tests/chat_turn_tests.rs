@@ -152,6 +152,7 @@ fn sample_turn_request() -> TurnRequest {
                 content: "hello".to_string(),
             }],
             tools: vec![],
+            tool_choice: None,
         },
         provider_context: ProviderContext {
             api_key: None,

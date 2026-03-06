@@ -273,6 +273,13 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolChoice {
+    Auto,
+    Required,
+    Specific { name: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderRequest {
     pub session_id: String,
@@ -282,6 +289,8 @@ pub struct ProviderRequest {
     pub input: Vec<ProviderInputMessage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

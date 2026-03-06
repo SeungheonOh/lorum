@@ -283,7 +283,9 @@ impl UiReducer for DefaultUiReducer {
             | RuntimeEvent::AssistantThinkingDelta { .. }
             | RuntimeEvent::ToolExecutionStart { .. }
             | RuntimeEvent::ToolExecutionEnd { .. }
-            | RuntimeEvent::ToolResultReceived { .. } => {}
+            | RuntimeEvent::ToolResultReceived { .. }
+            | RuntimeEvent::SubagentSpawned { .. }
+            | RuntimeEvent::SubagentCompleted { .. } => {}
             RuntimeEvent::SessionSwitched { to_session_id, .. } => {
                 self.state.active_session = Some(to_session_id.clone());
             }

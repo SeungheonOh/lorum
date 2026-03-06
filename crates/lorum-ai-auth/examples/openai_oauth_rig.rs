@@ -388,6 +388,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             system_prompt: None,
             input: vec![ProviderInputMessage::User { content: prompt }],
             tools: vec![],
+            tool_choice: None,
         },
         ProviderContext {
             api_key: Some(active_credential.access_token),

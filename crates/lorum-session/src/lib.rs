@@ -23,10 +23,32 @@ pub struct SwitchResult {
     pub to_event_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionMetadata {
+    pub parent_session_id: Option<SessionId>,
+    pub agent_type: Option<String>,
+    pub task_id: Option<String>,
+    pub depth: u32,
+    pub spawned_by_tool_call_id: Option<String>,
+}
+
 pub trait SessionStore: Send + Sync {
     fn append(&self, session_id: &SessionId, ev: RuntimeEvent) -> Result<(), SessionError>;
     fn replay(&self, session_id: &SessionId) -> Result<Vec<RuntimeEvent>, SessionError>;
     fn switch(&self, from: &SessionId, to: &SessionId) -> Result<SwitchResult, SessionError>;
+    fn create_session(
+        &self,
+        _session_id: &SessionId,
+        _metadata: SessionMetadata,
+    ) -> Result<(), SessionError> {
+        Ok(())
+    }
+    fn get_metadata(
+        &self,
+        _session_id: &SessionId,
+    ) -> Result<Option<SessionMetadata>, SessionError> {
+        Ok(None)
+    }
 }
 
 #[derive(Debug)]
@@ -38,6 +60,7 @@ struct StoredEvent {
 #[derive(Debug, Default)]
 pub struct InMemorySessionStore {
     events: RwLock<HashMap<SessionId, Vec<StoredEvent>>>,
+    metadata: RwLock<HashMap<SessionId, SessionMetadata>>,
     next_insertion_order: AtomicU64,
 }
 
@@ -97,6 +120,30 @@ impl SessionStore for InMemorySessionStore {
             from_event_count,
             to_event_count: to_events.len(),
         })
+    }
+
+    fn create_session(
+        &self,
+        session_id: &SessionId,
+        metadata: SessionMetadata,
+    ) -> Result<(), SessionError> {
+        let mut guard = self
+            .metadata
+            .write()
+            .map_err(|_| SessionError::LockPoisoned)?;
+        guard.insert(session_id.clone(), metadata);
+        Ok(())
+    }
+
+    fn get_metadata(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionMetadata>, SessionError> {
+        let guard = self
+            .metadata
+            .read()
+            .map_err(|_| SessionError::LockPoisoned)?;
+        Ok(guard.get(session_id).cloned())
     }
 }
 

@@ -20,6 +20,7 @@ pub mod replace;
 pub mod resolve;
 pub mod rewind;
 pub mod ssh;
+pub mod submit_result;
 pub mod task;
 pub mod todo_write;
 pub mod web_search;

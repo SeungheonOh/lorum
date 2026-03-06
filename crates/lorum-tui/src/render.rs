@@ -222,6 +222,27 @@ fn render_content_line(line: &str, skins: &Skins) -> String {
     }
 }
 
+pub fn render_subagent_spawned(agent_type: &str, task_id: &str, skins: &Skins) -> String {
+    format!(
+        "{}",
+        skins
+            .dim
+            .apply_to(format!("  [subagent] spawning {agent_type} for task {task_id}"))
+    )
+}
+
+pub fn render_subagent_completed(agent_type: &str, status: &str, skins: &Skins) -> String {
+    let style = match status {
+        "completed" => &skins.success,
+        "failed" | "aborted" => &skins.error,
+        _ => &skins.dim,
+    };
+    format!(
+        "{}",
+        style.apply_to(format!("  [subagent] {agent_type} {status}"))
+    )
+}
+
 /// Emit ANSI escape sequences to move cursor up `n` lines (visual rows)
 /// and clear from there to end of screen.
 pub fn clear_last_n_lines(n: usize) -> String {

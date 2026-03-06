@@ -201,6 +201,8 @@ fn runtime_with_provider(
         RuntimeConfig {
             max_tool_turns: 0,
             timeout_ms: 30_000,
+            max_output_bytes: 500_000,
+            max_output_lines: 5_000,
         },
         Arc::new(FixedAuthResolver),
         model_resolver,

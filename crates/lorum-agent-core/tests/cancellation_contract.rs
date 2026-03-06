@@ -154,6 +154,7 @@ fn sample_turn_request(cancellation_token: Arc<AtomicBool>) -> TurnRequest {
                 content: "hello".to_string(),
             }],
             tools: vec![],
+            tool_choice: None,
         },
         provider_context: ProviderContext {
             api_key: None,

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use lorum_domain::RuntimeEvent;
+use lorum_domain::{RuntimeEvent, SessionId};
 use lorum_runtime::{RuntimeSubscriber, ToolCallDisplay};
 use lorum_ui_core::{DefaultUiReducer, UiReducer};
 
@@ -40,6 +40,10 @@ pub struct CliSubscriber {
     tool_display: Arc<dyn ToolCallDisplay>,
     /// Maps tool_call_id -> tool_name for use when ToolResultReceived arrives.
     tool_names: Mutex<HashMap<String, String>>,
+    /// Child session IDs spawned by subagents; events for these are suppressed from the reducer.
+    child_sessions: Mutex<HashSet<SessionId>>,
+    /// Maps turn_id -> session_id for child sessions (to identify child events by turn_id).
+    child_turn_sessions: Mutex<HashMap<lorum_domain::TurnId, SessionId>>,
 }
 
 impl CliSubscriber {
@@ -50,12 +54,87 @@ impl CliSubscriber {
             stream_state: Mutex::new(StreamState::default()),
             tool_display,
             tool_names: Mutex::new(HashMap::new()),
+            child_sessions: Mutex::new(HashSet::new()),
+            child_turn_sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns true if this event belongs to a child (subagent) session and should
+    /// be suppressed from the main reducer and most rendering.
+    fn is_child_session_event(&self, event: &RuntimeEvent) -> bool {
+        match event {
+            RuntimeEvent::TurnStarted {
+                turn_id,
+                session_id,
+                ..
+            } => {
+                let is_child = self
+                    .child_sessions
+                    .lock()
+                    .map(|s| s.contains(session_id))
+                    .unwrap_or(false);
+                if is_child {
+                    if let Ok(mut map) = self.child_turn_sessions.lock() {
+                        map.insert(turn_id.clone(), session_id.clone());
+                    }
+                }
+                is_child
+            }
+            RuntimeEvent::UserMessageReceived { session_id, .. } => self
+                .child_sessions
+                .lock()
+                .map(|s| s.contains(session_id))
+                .unwrap_or(false),
+            _ => {
+                if let Some(turn_id) = event.turn_id() {
+                    self.child_turn_sessions
+                        .lock()
+                        .map(|m| m.contains_key(turn_id))
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            }
         }
     }
 }
 
 impl RuntimeSubscriber for CliSubscriber {
     fn on_event(&self, event: &RuntimeEvent) {
+        // Handle subagent lifecycle events first (they carry parent session_id)
+        match event {
+            RuntimeEvent::SubagentSpawned {
+                child_session_id,
+                agent_type,
+                task_id,
+                ..
+            } => {
+                if let Ok(mut children) = self.child_sessions.lock() {
+                    children.insert(child_session_id.clone());
+                }
+                println!(
+                    "{}",
+                    render::render_subagent_spawned(agent_type, task_id, &self.skins)
+                );
+                return;
+            }
+            RuntimeEvent::SubagentCompleted {
+                agent_type, status, ..
+            } => {
+                println!(
+                    "{}",
+                    render::render_subagent_completed(agent_type, status, &self.skins)
+                );
+                return;
+            }
+            _ => {}
+        }
+
+        // Suppress child session events from main reducer and rendering
+        if self.is_child_session_event(event) {
+            return;
+        }
+
         if let Ok(mut reducer) = self.reducer.lock() {
             if let Err(err) = reducer.apply(event) {
                 eprintln!("ui reducer rejected runtime event: {err}");
@@ -253,7 +332,10 @@ impl RuntimeSubscriber for CliSubscriber {
                     render::render_tool_result(*is_error, &summary, &self.skins)
                 );
             }
-            RuntimeEvent::SessionSwitched { .. } | RuntimeEvent::UserMessageReceived { .. } => {}
+            RuntimeEvent::SessionSwitched { .. }
+            | RuntimeEvent::UserMessageReceived { .. }
+            | RuntimeEvent::SubagentSpawned { .. }
+            | RuntimeEvent::SubagentCompleted { .. } => {}
         }
     }
 }

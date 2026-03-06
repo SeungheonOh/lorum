@@ -205,6 +205,8 @@ fn main() {
         RuntimeConfig {
             max_tool_turns: 0,
             timeout_ms: 30_000,
+            max_output_bytes: 500_000,
+            max_output_lines: 5_000,
         },
         auth_resolver,
         model_resolver,

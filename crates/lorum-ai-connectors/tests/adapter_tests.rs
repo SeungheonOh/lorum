@@ -202,6 +202,7 @@ fn sample_request() -> ProviderRequest {
             content: "hello".to_string(),
         }],
         tools: vec![],
+        tool_choice: None,
     }
 }
 

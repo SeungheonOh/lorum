@@ -13,7 +13,7 @@ use lorum_domain::{RuntimeEvent, SessionId, TurnId};
 use lorum_runtime::{
     ChatOnlyRuntime, ModelSelectRequest, RuntimeAuthResolver, RuntimeConfig, RuntimeController,
     RuntimeError, RuntimeModelResolver, RuntimeProviderRegistry, RuntimeSubscriber,
-    ToolExecutionResult, ToolExecutor, UserInputCommand,
+    ToolDispatcher, ToolExecutionResult, ToolExecutor, UserInputCommand,
 };
 use lorum_session::{InMemorySessionStore, SessionStore};
 use serde_json::Value;
@@ -269,13 +269,15 @@ fn runtime_with_tool_executor(
     let mut providers: HashMap<String, Arc<dyn ProviderAdapter>> = HashMap::new();
     providers.insert("mock".to_string(), provider);
 
+    let dispatcher = tool_executor.map(|e| Arc::new(ToolDispatcher::new(e)));
+
     ChatOnlyRuntime::new(
         config,
         Arc::new(FixedAuthResolver),
         Arc::new(RecordingModelResolver::default()),
         Arc::new(StaticProviderRegistry { providers }),
         session_store,
-        tool_executor,
+        dispatcher,
     )
 }
 
@@ -291,6 +293,8 @@ fn successful_submit_persists_and_broadcasts_events() {
             RuntimeConfig {
                 max_tool_turns: 0,
                 timeout_ms: 30_000,
+                max_output_bytes: 500_000,
+                max_output_lines: 5_000,
             },
             Arc::new(StaticProviderRegistry { providers }),
             model_resolver,
@@ -336,6 +340,8 @@ fn provider_missing_returns_explicit_error() {
             RuntimeConfig {
                 max_tool_turns: 0,
                 timeout_ms: 30_000,
+                max_output_bytes: 500_000,
+                max_output_lines: 5_000,
             },
             Arc::new(StaticProviderRegistry {
                 providers: HashMap::new(),
@@ -363,6 +369,8 @@ fn set_model_override_is_used_by_model_resolver() {
             RuntimeConfig {
                 max_tool_turns: 0,
                 timeout_ms: 30_000,
+                max_output_bytes: 500_000,
+                max_output_lines: 5_000,
             },
             Arc::new(StaticProviderRegistry { providers }),
             model_resolver.clone(),
@@ -405,6 +413,8 @@ fn no_executor_injects_synthetic_results() {
             RuntimeConfig {
                 max_tool_turns: 5,
                 timeout_ms: 30_000,
+                max_output_bytes: 500_000,
+                max_output_lines: 5_000,
             },
             Arc::new(MockToolUseProvider::new()),
             Arc::clone(&session_store),
@@ -453,6 +463,8 @@ fn max_tool_turns_exceeded_injects_synthetic_results() {
             RuntimeConfig {
                 max_tool_turns: 1,
                 timeout_ms: 30_000,
+                max_output_bytes: 500_000,
+                max_output_lines: 5_000,
             },
             Arc::new(MockToolUseProvider::new()),
             Arc::clone(&session_store),
@@ -498,6 +510,8 @@ fn subsequent_submit_succeeds_after_synthetic_injection() {
             RuntimeConfig {
                 max_tool_turns: 0,
                 timeout_ms: 30_000,
+                max_output_bytes: 500_000,
+                max_output_lines: 5_000,
             },
             Arc::new(MockToolUseProvider::new()),
             Arc::clone(&session_store),
